@@ -1,0 +1,22 @@
+[Unit]
+Description=BMSeller background collector and mail queue
+After=network-online.target bmseller-web.service
+Wants=network-online.target
+
+[Service]
+User=bmseller
+Group=bmseller
+WorkingDirectory=/opt/bmseller
+EnvironmentFile=/etc/bmseller.env
+ExecStart=/opt/bmseller/.venv/bin/python worker.py
+Restart=on-failure
+RestartSec=5
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/opt/bmseller/data
+
+[Install]
+WantedBy=multi-user.target

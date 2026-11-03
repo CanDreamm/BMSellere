@@ -1,0 +1,14 @@
+# systemd EnvironmentFile format; not loaded automatically by Python.
+# Replace this value before starting the web service.
+APP_PASSWORD=REPLACE_WITH_LONG_RANDOM_PASSWORD
+DATABASE_PATH=/opt/bmseller/data/app.db
+# Optional HTTPS XLSX source:
+# COMPANY_FEED_URL=https://data.example.ru/companies.xlsx
+FEED_INTERVAL_SECONDS=86400
+JOB_DELAY_SECONDS=2
+# Optional mail transport: STARTTLS, usually port 587 (not implicit TLS 465).
+# SMTP_HOST=smtp.example.ru
+# SMTP_PORT=587
+# SMTP_USER=sales@example.ru
+# SMTP_PASSWORD=REPLACE_SECURELY
+# SMTP_FROM=sales@example.ru
