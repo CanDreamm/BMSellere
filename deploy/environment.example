@@ -14,3 +14,5 @@ SMTP_SECURITY=ssl
 # SMTP_USER=your-address@mail.ru
 # SMTP_PASSWORD=REPLACE_WITH_APP_PASSWORD
 # SMTP_FROM=your-address@mail.ru
+# Registry-first research (paid/search-provider quota). Not auto-enabled on import.
+# BRAVE_SEARCH_API_KEY=REPLACE_SECURELY

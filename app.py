@@ -37,6 +37,14 @@ def init_db():
           phone TEXT DEFAULT '', website TEXT DEFAULT '', source TEXT DEFAULT '',
           status TEXT DEFAULT 'pending', found_at TEXT DEFAULT CURRENT_TIMESTAMP,
           UNIQUE(source_id,inn));
+        CREATE TABLE IF NOT EXISTS registry_entries(company_id INTEGER PRIMARY KEY REFERENCES companies(id),
+          region TEXT,status TEXT,source TEXT,imported_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS research_state(company_id INTEGER PRIMARY KEY REFERENCES companies(id),
+          enabled INTEGER DEFAULT 0,stage TEXT DEFAULT 'registry',attempts INTEGER DEFAULT 0,
+          checked_at TEXT,next_run_at TEXT,last_error TEXT DEFAULT '');
+        CREATE TABLE IF NOT EXISTS research_evidence(id INTEGER PRIMARY KEY,company_id INTEGER REFERENCES companies(id),
+          field TEXT,value TEXT,url TEXT,strength TEXT,checked_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(company_id,field,value,url));
         CREATE TABLE IF NOT EXISTS offers (id INTEGER PRIMARY KEY, title TEXT NOT NULL,
           subject TEXT NOT NULL, body TEXT NOT NULL, attachment TEXT);
         CREATE TABLE IF NOT EXISTS jobs (id INTEGER PRIMARY KEY, kind TEXT NOT NULL,
@@ -114,11 +122,43 @@ def create_app():
     @app.get('/collector')
     def collector_page():
         with db() as c:
-            sources=c.execute('SELECT * FROM collection_sources ORDER BY id DESC').fetchall()
+            sources=c.execute("SELECT * FROM collection_sources WHERE kind IN ('website','search','registry') ORDER BY id DESC").fetchall()
             candidates=c.execute("SELECT collection_candidates.*,collection_sources.name source_name FROM collection_candidates JOIN collection_sources ON collection_sources.id=source_id WHERE status='pending' ORDER BY found_at DESC LIMIT 100").fetchall()
             runs=c.execute("SELECT jobs.*,collection_sources.name source_name FROM jobs JOIN collection_sources ON collection_sources.id=source_id WHERE jobs.kind='collect' ORDER BY jobs.id DESC LIMIT 20").fetchall()
+            research_rows=c.execute("SELECT companies.*,research_state.stage,research_state.enabled,research_state.last_error,research_state.next_run_at FROM research_state JOIN companies ON companies.id=company_id ORDER BY companies.id DESC LIMIT 100").fetchall()
+            evidence=c.execute('SELECT research_evidence.*,companies.inn FROM research_evidence JOIN companies ON companies.id=company_id ORDER BY checked_at DESC,id DESC LIMIT 100').fetchall()
             total=c.execute("SELECT count(*) FROM collection_candidates WHERE status='pending'").fetchone()[0]
-        return render_template('collector.html',sources=sources,candidates=candidates,runs=runs,total=total,fields=FIELDS)
+        return render_template('collector.html',sources=sources,candidates=candidates,runs=runs,total=total,fields=FIELDS,research_rows=research_rows,evidence=evidence,search_ready=bool(os.environ.get('BRAVE_SEARCH_API_KEY')))
+
+    @app.get('/registry/template')
+    def registry_template():
+        book=Workbook(); book.active.append(['Организация','ИНН','Код региона','Статус','Адрес','Описание чем занимаются'])
+        buf=io.BytesIO(); book.save(buf); buf.seek(0)
+        return send_file(buf,as_attachment=True,download_name='registry-template.xlsx')
+
+    @app.post('/registry/import')
+    def registry_upload():
+        from research import import_registry
+        try:
+            file=request.files.get('file')
+            if not file: raise ValueError('Выберите файл')
+            count,skipped=import_registry(file.read(),'Реестр: импорт XLSX')
+            flash(f'Реестр: принято {count}, исключено по региону/статусу {skipped}. Поиск включается отдельно.')
+        except Exception:
+            flash('Импорт реестра отменён: проверьте ИНН и колонки Организация, ИНН, Код региона, Статус.')
+        return redirect('/collector')
+
+    @app.post('/research/control')
+    def research_control():
+        ids=request.form.getlist('company')
+        action=request.form.get('action')
+        if action not in ('start','pause'): abort(400)
+        if len(ids)>100: abort(400)
+        with db() as c:
+            for cid in ids:
+                c.execute("UPDATE research_state SET enabled=?,next_run_at=NULL WHERE company_id=? AND stage!='registry_excluded'",(int(action=='start'),cid))
+        flash('Настройки поиска по ИНН сохранены. Поиск использует лимиты вашего Brave Search API.')
+        return redirect('/collector')
 
     @app.post('/collector/sources')
     def collector_source():
@@ -126,11 +166,13 @@ def create_app():
         try:
             url=canonical(request.form.get('url','').strip())
             name=request.form.get('name','').strip()
+            kind=request.form.get('kind','website')
+            if kind not in ('website','registry'): raise ValueError()
             limit=int(request.form.get('max_pages','20'))
             interval=int(request.form.get('interval_hours','24'))
             if not name or not 1 <= limit <= 100 or not 1 <= interval <= 720: raise ValueError()
             with db() as c:
-                c.execute('INSERT INTO collection_sources(name,url,max_pages,interval_hours) VALUES (?,?,?,?)',(name,url,limit,interval))
+                c.execute('INSERT INTO collection_sources(name,url,max_pages,interval_hours,kind) VALUES (?,?,?,?,?)',(name,url,limit,interval,kind))
             flash('Источник добавлен. Worker запустит сбор и будет повторять его по расписанию.')
         except (ValueError,sqlite3.IntegrityError):
             flash('Проверьте URL и параметры. Источник с таким URL не должен повторяться.')
@@ -183,6 +225,7 @@ def create_app():
                     values={k:existing[k] or v for k,v in values.items()}
                 upsert(c,values,candidate['source'])
                 c.execute("UPDATE collection_candidates SET status='approved' WHERE id=?",(cid,))
+                c.execute("UPDATE research_state SET stage='complete' WHERE company_id IN (SELECT id FROM companies WHERE inn=?)",(values['inn'],))
                 flash('Компания добавлена в базу. Согласие на рассылку не менялось.')
             elif action=='reject':
                 c.execute("UPDATE collection_candidates SET status='rejected' WHERE id=?",(cid,))

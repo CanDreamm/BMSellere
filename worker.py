@@ -101,7 +101,18 @@ def process_one():
             from collector import collect
             with db() as c:
                 source=c.execute('SELECT * FROM collection_sources WHERE id=?',(job['source_id'],)).fetchone()
-            collect(source,fetch)
+            if source['kind']=='registry':
+                from research import import_registry
+                payload,url=fetch(source['url'])
+                count,skipped=import_registry(payload,url)
+                with db() as c:
+                    c.execute('UPDATE collection_sources SET last_run_at=CURRENT_TIMESTAMP,last_result=? WHERE id=?',(f'Принято: {count}; исключено: {skipped}',source['id']))
+            else: collect(source,fetch)
+        elif job['kind']=='research':
+            from research import research_company
+            with db() as c:
+                c.execute("UPDATE research_state SET stage='searching' WHERE company_id=? AND stage!='registry_excluded'",(company['id'],))
+            research_company(company,fetch)
         elif job['kind']=='enrich': enrich(company)
         elif job['kind']=='send': send(company,offer)
         else: raise ValueError('Неизвестный тип задания')
@@ -109,6 +120,9 @@ def process_one():
     except Exception as exc:
         # Store safe error class, never SMTP credentials or upstream response bodies.
         status,error='failed',type(exc).__name__
+        if job['kind']=='research':
+            with db() as c:
+                c.execute("UPDATE research_state SET stage='error',attempts=attempts+1,last_error=?,next_run_at=datetime('now','+' || min(168, (1 << min(attempts,7))) || ' hours') WHERE company_id=?",(error,job['company_id']))
     with db() as c:
         c.execute('UPDATE jobs SET status=?,error=?,finished_at=CURRENT_TIMESTAMP WHERE id=?',(status,error,job['id']))
     return True
@@ -117,7 +131,7 @@ def process_one():
 def schedule_sources():
     with db() as c:
         c.execute("""INSERT OR IGNORE INTO jobs(kind,source_id)
-            SELECT 'collect',s.id FROM collection_sources s WHERE enabled=1
+            SELECT 'collect',s.id FROM collection_sources s WHERE enabled=1 AND s.kind IN ('website','search','registry')
             AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.source_id=s.id AND j.kind='collect'
               AND (j.status IN ('pending','running') OR
                 j.created_at > datetime('now','-' || s.interval_hours || ' hours')))""")
@@ -128,6 +142,8 @@ def main():
     while True:
         now=time.time()
         schedule_sources()
+        from research import schedule_research
+        schedule_research()
         if os.environ.get('COMPANY_FEED_URL') and now-last_sync>int(os.environ.get('FEED_INTERVAL_SECONDS','86400')):
             try:
                 payload,url=fetch(os.environ['COMPANY_FEED_URL']); count=import_excel(payload,url)
@@ -137,7 +153,7 @@ def main():
         if now-last_enrich>3600:
             with db() as c:
                 c.execute("""INSERT INTO jobs(kind,company_id) SELECT 'enrich',id FROM companies c
-                WHERE website!='' AND (checked_at IS NULL OR checked_at < datetime('now','-30 days'))
+                WHERE website!='' AND NOT EXISTS(SELECT 1 FROM research_state r WHERE r.company_id=c.id) AND (checked_at IS NULL OR checked_at < datetime('now','-30 days'))
                 AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.company_id=c.id AND j.kind='enrich'
                 AND (j.status IN ('pending','running') OR j.created_at>datetime('now','-1 day'))) LIMIT 100""")
             last_enrich=now
