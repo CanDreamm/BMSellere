@@ -137,3 +137,13 @@ def test_search_unavailable_is_reported(client,monkeypatch):
         assert c.execute('SELECT status FROM jobs').fetchone()[0]=='failed'
         assert 'Поиск недоступен' in c.execute('SELECT last_result FROM collection_sources').fetchone()[0]
         assert c.execute('SELECT count(*) FROM collection_candidates').fetchone()[0]==0
+
+
+def test_concurrent_initialization(tmp_path,monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    monkeypatch.setenv('DATABASE_PATH',str(tmp_path/'concurrent.db'))
+    with ThreadPoolExecutor(max_workers=4) as pool:
+        list(pool.map(lambda _:app.init_db(),range(4)))
+    with app.db() as c:
+        assert 'kind' in {r['name'] for r in c.execute('PRAGMA table_info(collection_sources)')}
+        assert 'source_id' in {r['name'] for r in c.execute('PRAGMA table_info(jobs)')}

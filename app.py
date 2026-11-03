@@ -45,6 +45,7 @@ def init_db():
           finished_at TEXT);
         CREATE UNIQUE INDEX IF NOT EXISTS unique_delivery ON jobs(company_id, offer_id) WHERE kind='send';
         ''')
+        c.execute('BEGIN IMMEDIATE')
         if 'source_id' not in {row['name'] for row in c.execute('PRAGMA table_info(jobs)')}:
             c.execute('ALTER TABLE jobs ADD COLUMN source_id INTEGER REFERENCES collection_sources(id)')
         if 'kind' not in {row['name'] for row in c.execute('PRAGMA table_info(collection_sources)')}:
