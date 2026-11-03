@@ -1,7 +1,7 @@
 # systemd EnvironmentFile format; not loaded automatically by Python.
 # Replace this value before starting the web service.
 APP_PASSWORD=REPLACE_WITH_LONG_RANDOM_PASSWORD
-DATABASE_PATH=/opt/bmseller/data/app.db
+DATABASE_PATH=/opt/BMSeller/data/app.db
 # Optional HTTPS XLSX source:
 # COMPANY_FEED_URL=https://data.example.ru/companies.xlsx
 FEED_INTERVAL_SECONDS=86400

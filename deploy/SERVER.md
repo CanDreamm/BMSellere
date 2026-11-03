@@ -2,6 +2,8 @@
 
 Инструкция для **Ubuntu 24.04 LTS**, одного небольшого сервера (ориентир: 1–2 CPU, 2 ГБ RAM), домена и доступа sudo. Серверная часть полностью на Python; Nginx завершает HTTPS, systemd перезапускает web и worker. На других ОС команды установки пакетов отличаются.
 
+Приложение устанавливается в `/opt/BMSeller` (регистр букв важен). Имя репозитория GitHub остаётся `BMSellere`, системный пользователь — `bmseller`.
+
 ## 1. Подготовить сервер
 
 Направьте DNS A-запись вашего домена на IPv4 сервера; AAAA добавляйте только при настроенном IPv6. Замените во всех примерах `crm.example.ru` своим доменом. Разрешите входящие TCP 80/443 в сетевых настройках хостинга, сохраните SSH-доступ. Порт 8000 наружу открывать не нужно.
@@ -9,12 +11,12 @@
 ```sh
 sudo apt update
 sudo apt install -y git python3 python3-venv nginx certbot python3-certbot-nginx
-sudo adduser --system --group --home /opt/bmseller bmseller
-sudo git clone --branch main https://github.com/CanDreamm/BMSellere.git /opt/bmseller
-sudo chown -R bmseller:bmseller /opt/bmseller
-sudo -u bmseller python3 -m venv /opt/bmseller/.venv
-sudo -u bmseller /opt/bmseller/.venv/bin/python -m pip install -r /opt/bmseller/requirements-dev.txt
-cd /opt/bmseller
+sudo adduser --system --group --home /opt/BMSeller bmseller
+sudo git clone --branch main https://github.com/CanDreamm/BMSellere.git /opt/BMSeller
+sudo chown -R bmseller:bmseller /opt/BMSeller
+sudo -u bmseller python3 -m venv /opt/BMSeller/.venv
+sudo -u bmseller /opt/BMSeller/.venv/bin/python -m pip install -r /opt/BMSeller/requirements-dev.txt
+cd /opt/BMSeller
 sudo -u bmseller .venv/bin/python -m pytest -q
 ```
 
@@ -29,7 +31,7 @@ sudoedit /etc/bmseller.env
 
 Обязательно замените `APP_PASSWORD` на длинный уникальный пароль. Вход в интерфейс: пользователь `admin`, этот пароль. Все операторы используют одну учётную запись; ролей пока нет. Пароль хранится только в файле на сервере, не в Git. systemd читает файл до запуска процесса под пользователем bmseller. Не выполняйте `source /etc/bmseller.env` — это формат EnvironmentFile systemd.
 
-База, сессионный ключ и PDF создаются в `/opt/bmseller/data`. Задавать `SESSION_SECRET` не обязательно: приложение сохраняет случайный ключ в этом каталоге.
+База, сессионный ключ и PDF создаются в `/opt/BMSeller/data`. Задавать `SESSION_SECRET` не обязательно: приложение сохраняет случайный ключ в этом каталоге.
 
 Источник компаний и почта необязательны для запуска интерфейса:
 
@@ -64,7 +66,7 @@ sudo certbot renew --dry-run
 ## 4. Постоянные службы
 
 ```sh
-cd /opt/bmseller
+cd /opt/BMSeller
 sudo cp deploy/bmseller-web.service deploy/bmseller-worker.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl enable --now bmseller-web
@@ -89,9 +91,9 @@ sudo journalctl -u bmseller-worker -n 100 --no-pager
 
 ```sh
 sudo systemctl stop bmseller-worker bmseller-web
-sudo -u bmseller git -C /opt/bmseller pull --ff-only origin main
-sudo -u bmseller /opt/bmseller/.venv/bin/python -m pip install -r /opt/bmseller/requirements-dev.txt
-cd /opt/bmseller
+sudo -u bmseller git -C /opt/BMSeller pull --ff-only origin main
+sudo -u bmseller /opt/BMSeller/.venv/bin/python -m pip install -r /opt/BMSeller/requirements-dev.txt
+cd /opt/BMSeller
 sudo -u bmseller .venv/bin/python -m pytest -q
 sudo systemctl start bmseller-web bmseller-worker
 ```
@@ -105,11 +107,11 @@ sudo systemctl start bmseller-web bmseller-worker
 ```sh
 sudo systemctl stop bmseller-worker bmseller-web
 sudo install -d -m 700 /var/backups/bmseller
-sudo sh -c 'umask 077; tar -czf /var/backups/bmseller/backup-$(date +%Y%m%d-%H%M%S).tar.gz -C / opt/bmseller/data etc/bmseller.env'
+sudo sh -c 'umask 077; tar -czf /var/backups/bmseller/backup-$(date +%Y%m%d-%H%M%S).tar.gz -C / opt/BMSeller/data etc/bmseller.env'
 sudo systemctl start bmseller-web bmseller-worker
 ```
 
-Если архивирование не удалось, разберите причину и убедитесь, что службы снова запущены. Для восстановления остановите службы на новом сервере с тем же путём `/opt/bmseller`, распакуйте доверенную копию в `/` под root, верните владельца `bmseller:bmseller` каталогу `data/`, права 600 и владельца root файлу `/etc/bmseller.env`, затем запустите службы и проверьте интерфейс. Перед этим сохраните текущие данные. Отдельно проверьте задания `running`.
+Если архивирование не удалось, разберите причину и убедитесь, что службы снова запущены. Для восстановления остановите службы на новом сервере с тем же путём `/opt/BMSeller`, распакуйте доверенную копию в `/` под root, верните владельца `bmseller:bmseller` каталогу `data/`, права 600 и владельца root файлу `/etc/bmseller.env`, затем запустите службы и проверьте интерфейс. Перед этим сохраните текущие данные. Отдельно проверьте задания `running`.
 
 ## Ограничения
 
