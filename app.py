@@ -26,6 +26,17 @@ def init_db():
           phone TEXT DEFAULT '', email TEXT DEFAULT '', website TEXT DEFAULT '',
           consent INTEGER DEFAULT 0, excluded INTEGER DEFAULT 0,
           source TEXT DEFAULT '', checked_at TEXT, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
+        CREATE TABLE IF NOT EXISTS collection_sources (
+          id INTEGER PRIMARY KEY, name TEXT NOT NULL, url TEXT NOT NULL UNIQUE,
+          enabled INTEGER DEFAULT 1, max_pages INTEGER DEFAULT 20,
+          interval_hours INTEGER DEFAULT 24, last_run_at TEXT, last_result TEXT DEFAULT '');
+        CREATE TABLE IF NOT EXISTS collection_candidates (
+          id INTEGER PRIMARY KEY, source_id INTEGER REFERENCES collection_sources(id),
+          inn TEXT NOT NULL, name TEXT NOT NULL, brand TEXT DEFAULT '',
+          description TEXT DEFAULT '', address TEXT DEFAULT '', email TEXT DEFAULT '',
+          phone TEXT DEFAULT '', website TEXT DEFAULT '', source TEXT DEFAULT '',
+          status TEXT DEFAULT 'pending', found_at TEXT DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(source_id,inn));
         CREATE TABLE IF NOT EXISTS offers (id INTEGER PRIMARY KEY, title TEXT NOT NULL,
           subject TEXT NOT NULL, body TEXT NOT NULL, attachment TEXT);
         CREATE TABLE IF NOT EXISTS jobs (id INTEGER PRIMARY KEY, kind TEXT NOT NULL,
@@ -34,6 +45,11 @@ def init_db():
           finished_at TEXT);
         CREATE UNIQUE INDEX IF NOT EXISTS unique_delivery ON jobs(company_id, offer_id) WHERE kind='send';
         ''')
+        if 'source_id' not in {row['name'] for row in c.execute('PRAGMA table_info(jobs)')}:
+            c.execute('ALTER TABLE jobs ADD COLUMN source_id INTEGER REFERENCES collection_sources(id)')
+        if 'kind' not in {row['name'] for row in c.execute('PRAGMA table_info(collection_sources)')}:
+            c.execute("ALTER TABLE collection_sources ADD COLUMN kind TEXT NOT NULL DEFAULT 'website'")
+        c.execute("CREATE UNIQUE INDEX IF NOT EXISTS one_source_job ON jobs(source_id) WHERE kind='collect' AND status IN ('pending','running')")
 
 def upsert(c, values, source):
     inn = str(values.get('inn', '')).strip()
@@ -93,6 +109,85 @@ def create_app():
             offers = c.execute('SELECT * FROM offers ORDER BY id DESC').fetchall()
             jobs = c.execute('SELECT jobs.*, companies.name FROM jobs LEFT JOIN companies ON companies.id=jobs.company_id ORDER BY jobs.id DESC LIMIT 30').fetchall()
         return render_template('index.html', companies=companies, stats=stats, offers=offers,jobs=jobs,q=q,fields=FIELDS)
+
+    @app.get('/collector')
+    def collector_page():
+        with db() as c:
+            sources=c.execute('SELECT * FROM collection_sources ORDER BY id DESC').fetchall()
+            candidates=c.execute("SELECT collection_candidates.*,collection_sources.name source_name FROM collection_candidates JOIN collection_sources ON collection_sources.id=source_id WHERE status='pending' ORDER BY found_at DESC LIMIT 100").fetchall()
+            runs=c.execute("SELECT jobs.*,collection_sources.name source_name FROM jobs JOIN collection_sources ON collection_sources.id=source_id WHERE jobs.kind='collect' ORDER BY jobs.id DESC LIMIT 20").fetchall()
+            total=c.execute("SELECT count(*) FROM collection_candidates WHERE status='pending'").fetchone()[0]
+        return render_template('collector.html',sources=sources,candidates=candidates,runs=runs,total=total,fields=FIELDS)
+
+    @app.post('/collector/sources')
+    def collector_source():
+        from collector import canonical
+        try:
+            url=canonical(request.form.get('url','').strip())
+            name=request.form.get('name','').strip()
+            limit=int(request.form.get('max_pages','20'))
+            interval=int(request.form.get('interval_hours','24'))
+            if not name or not 1 <= limit <= 100 or not 1 <= interval <= 720: raise ValueError()
+            with db() as c:
+                c.execute('INSERT INTO collection_sources(name,url,max_pages,interval_hours) VALUES (?,?,?,?)',(name,url,limit,interval))
+            flash('Источник добавлен. Worker запустит сбор и будет повторять его по расписанию.')
+        except (ValueError,sqlite3.IntegrityError):
+            flash('Проверьте URL и параметры. Источник с таким URL не должен повторяться.')
+        return redirect('/collector')
+
+    @app.post('/collector/search')
+    def collector_search():
+        from collector import search_url
+        queries=list(dict.fromkeys(line.strip() for line in request.form.get('queries','').splitlines() if line.strip()))
+        if not queries or len(queries)>20 or any(len(q)>250 for q in queries):
+            abort(400,'Укажите от 1 до 20 запросов, каждый до 250 символов')
+        try:
+            limit=int(request.form.get('max_pages','20'))
+            if not 1 <= limit <= 100: raise ValueError()
+        except ValueError: abort(400)
+        with db() as c:
+            for query in queries:
+                c.execute("INSERT OR IGNORE INTO collection_sources(name,url,max_pages,interval_hours,kind) VALUES (?,?,?,24,'search')",(query,search_url(query),limit))
+        flash('Поисковые запросы добавлены. Worker будет искать страницы в интернете каждые 24 часа. Найденные компании появятся ниже на проверке.')
+        return redirect('/collector')
+
+    @app.post('/collector/sources/<int:sid>')
+    def collector_action(sid):
+        action=request.form.get('action')
+        with db() as c:
+            source=c.execute('SELECT * FROM collection_sources WHERE id=?',(sid,)).fetchone()
+            if not source: abort(404)
+            if action=='run':
+                c.execute("INSERT OR IGNORE INTO jobs(kind,source_id) VALUES ('collect',?)",(sid,))
+                flash('Сбор поставлен в очередь. Повторное активное задание не создаётся.')
+            elif action=='toggle':
+                c.execute('UPDATE collection_sources SET enabled=1-enabled WHERE id=?',(sid,))
+                flash('Расписание изменено. Уже поставленные задания выполнятся.')
+            else: abort(400)
+        return redirect('/collector')
+
+    @app.post('/collector/candidates/<int:cid>')
+    def review_candidate(cid):
+        action=request.form.get('action')
+        with db() as c:
+            candidate=c.execute("SELECT * FROM collection_candidates WHERE id=? AND status='pending'",(cid,)).fetchone()
+            if not candidate: abort(404)
+            if action=='approve':
+                values={key:request.form.get(key,candidate[key]) for key in FIELDS.values()}
+                from collector import valid_inn
+                if not valid_inn(values['inn']) or not values['name'].strip(): abort(400,'Проверьте ИНН и название')
+                existing=c.execute('SELECT * FROM companies WHERE inn=?',(values['inn'],)).fetchone()
+                # Reviewed candidates fill blanks; existing operator data win.
+                if existing:
+                    values={k:existing[k] or v for k,v in values.items()}
+                upsert(c,values,candidate['source'])
+                c.execute("UPDATE collection_candidates SET status='approved' WHERE id=?",(cid,))
+                flash('Компания добавлена в базу. Согласие на рассылку не менялось.')
+            elif action=='reject':
+                c.execute("UPDATE collection_candidates SET status='rejected' WHERE id=?",(cid,))
+                flash('Карточка отклонена.')
+            else: abort(400)
+        return redirect('/collector')
 
     @app.post('/companies')
     def save_company():

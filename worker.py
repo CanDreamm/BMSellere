@@ -86,8 +86,14 @@ def process_one():
         with db() as c:
             company=c.execute('SELECT * FROM companies WHERE id=?',(job['company_id'],)).fetchone()
             offer=c.execute('SELECT * FROM offers WHERE id=?',(job['offer_id'],)).fetchone()
-        if job['kind']=='enrich': enrich(company)
-        else: send(company,offer)
+        if job['kind']=='collect':
+            from collector import collect
+            with db() as c:
+                source=c.execute('SELECT * FROM collection_sources WHERE id=?',(job['source_id'],)).fetchone()
+            collect(source,fetch)
+        elif job['kind']=='enrich': enrich(company)
+        elif job['kind']=='send': send(company,offer)
+        else: raise ValueError('Неизвестный тип задания')
         status,error='done',''
     except Exception as exc:
         # Store safe error class, never SMTP credentials or upstream response bodies.
@@ -97,10 +103,20 @@ def process_one():
     return True
 
 
+def schedule_sources():
+    with db() as c:
+        c.execute("""INSERT OR IGNORE INTO jobs(kind,source_id)
+            SELECT 'collect',s.id FROM collection_sources s WHERE enabled=1
+            AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.source_id=s.id AND j.kind='collect'
+              AND (j.status IN ('pending','running') OR
+                j.created_at > datetime('now','-' || s.interval_hours || ' hours')))""")
+
+
 def main():
     init_db(); last_sync=0; last_enrich=0
     while True:
         now=time.time()
+        schedule_sources()
         if os.environ.get('COMPANY_FEED_URL') and now-last_sync>int(os.environ.get('FEED_INTERVAL_SECONDS','86400')):
             try:
                 payload,url=fetch(os.environ['COMPANY_FEED_URL']); count=import_excel(payload,url)
