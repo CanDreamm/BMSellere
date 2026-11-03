@@ -6,9 +6,11 @@ DATABASE_PATH=/opt/BMSeller/data/app.db
 # COMPANY_FEED_URL=https://data.example.ru/companies.xlsx
 FEED_INTERVAL_SECONDS=86400
 JOB_DELAY_SECONDS=2
-# Optional mail transport: STARTTLS, usually port 587 (not implicit TLS 465).
-# SMTP_HOST=smtp.example.ru
-# SMTP_PORT=587
-# SMTP_USER=sales@example.ru
-# SMTP_PASSWORD=REPLACE_SECURELY
-# SMTP_FROM=sales@example.ru
+# Mail.ru: create a separate password for an external mail application.
+SMTP_HOST=smtp.mail.ru
+SMTP_PORT=465
+SMTP_SECURITY=ssl
+# Fill these on the server; sending remains disabled until all are present.
+# SMTP_USER=your-address@mail.ru
+# SMTP_PASSWORD=REPLACE_WITH_APP_PASSWORD
+# SMTP_FROM=your-address@mail.ru

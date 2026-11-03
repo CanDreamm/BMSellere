@@ -72,8 +72,19 @@ def send(company,offer):
     message.set_content(offer['body'].replace('{{organization}}',company['name']).replace('{{brand}}',company['brand']))
     if offer['attachment']:
         message.add_attachment(Path(offer['attachment']).read_bytes(),maintype='application',subtype='pdf',filename='presentation.pdf')
-    with smtplib.SMTP(os.environ['SMTP_HOST'],int(os.environ.get('SMTP_PORT','587')),timeout=30) as smtp:
-        smtp.starttls(context=ssl.create_default_context()); smtp.login(os.environ['SMTP_USER'],os.environ['SMTP_PASSWORD']); smtp.send_message(message)
+    security=os.environ.get('SMTP_SECURITY','starttls').lower()
+    if security not in ('ssl','starttls'):
+        raise ValueError('SMTP_SECURITY должен быть ssl или starttls')
+    port=int(os.environ.get('SMTP_PORT','465' if security=='ssl' else '587'))
+    context=ssl.create_default_context()
+    if security=='ssl':
+        transport=smtplib.SMTP_SSL(os.environ['SMTP_HOST'],port,timeout=30,context=context)
+    else:
+        transport=smtplib.SMTP(os.environ['SMTP_HOST'],port,timeout=30)
+    with transport as smtp:
+        if security=='starttls': smtp.starttls(context=context)
+        smtp.login(os.environ['SMTP_USER'],os.environ['SMTP_PASSWORD'])
+        smtp.send_message(message)
 
 
 def process_one():
